@@ -1,0 +1,1470 @@
+<?xml version="1.0" encoding="utf-8"?>
+<modification>
+  <name>Multilevel Marketing</name>
+  <code>PKJ</code>
+  <version>1.0</version>
+  <author>PkJangra</author>
+  <link>http://www.opencart.com</link>
+  <file path="admin/language/en-gb/customer/customer.php">
+  <operation>
+      <search trim="true">
+        <![CDATA[$_['column_ip']             = 'IP';]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        $_['tab_mlm']             = 'User Network';
+        $_['column_image']        = 'Profile Picture';
+        $_['text_reference_no']        = 'Refer Code';
+        ]]>
+      </add>
+    </operation>
+  </file>
+  <file path="admin/language/english/customer/customer.php">
+  <operation>
+      <search trim="true">
+        <![CDATA[$_['column_ip']             = 'IP';]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        $_['tab_mlm']             = 'User Network';
+        $_['column_image']        = 'Profile Picture';
+        $_['text_reference_no']        = 'Refer Code';
+        ]]>
+      </add>
+    </operation>
+  </file>
+  <file path="admin/controller/customer/customer.php">
+  <operation>
+      <search trim="true">
+        <![CDATA[if (isset($this->request->post['newsletter'])) {]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        if(!empty($data['account_custom_field']))
+        {
+          $this->load->model('tool/upload');
+          foreach($data['account_custom_field'] as $k=>$field)
+          {
+            $upload_info = $this->model_tool_upload->getUploadByCode($field);
+            if ($upload_info) {
+              $type = pathinfo($upload_info['name'], PATHINFO_EXTENSION);
+              $pic = file_get_contents(DIR_UPLOAD . $upload_info['filename']);
+              $data['account_custom_field'][$k.'_upload'] = $data['pic'] = 'data:image/' . $type . ';base64,' . base64_encode($pic);
+            }
+          }
+          $mlm = $this->model_customer_customer->getCustomerMlm($data['customer_id']);
+          $slice = array_slice($mlm,4);
+          $data['spam'] = [];
+          foreach ($slice as $result) {
+            if (!$result['approved']) {
+              $approve = $this->url->link('customer/customer/approve', 'token=' . $this->session->data['token'] . '&customer_id=' . $result['customer_id'] . $url, true);
+            } else {
+              $approve = '';
+            }
+
+            $login_info = $this->model_customer_customer->getTotalLoginAttempts($result['email']);
+
+            if ($login_info && $login_info['total'] >= $this->config->get('config_login_attempts')) {
+              $unlock = $this->url->link('customer/customer/unlock', 'token=' . $this->session->data['token'] . '&email=' . $result['email'] . $url, true);
+            } else {
+              $unlock = '';
+            }
+
+            $data['spam'][] = array(
+              'customer_id'    => $result['customer_id'],
+              'name'           => $result['name'],
+              'email'          => $result['email'],
+              'customer_group' => $result['customer_group'],
+              'status'         => ($result['status'] ? $this->language->get('text_enabled') : $this->language->get('text_disabled')),
+              'ip'             => $result['ip'],
+              'pic'            => $result['pic'],
+              'date_added'     => date($this->language->get('date_format_short'), strtotime($result['date_added'])),
+              'approve'        => $approve,
+              'unlock'         => $unlock,
+              'edit'           => $this->url->link('customer/customer/edit', 'token=' . $this->session->data['token'] . '&customer_id=' . $result['customer_id'] . $url, true)
+            );
+          }
+          //$data['spam'] = $slice;
+          $m = $this->getMlm($data,$mlm);
+          
+          $data['mlm'] = json_encode($m);
+          $data['free_level_users'] = array_values(array_filter($this->getMlmFreeChild($mlm)));
+          $users = array_values(array_filter($this->getMlmFreeChild($mlm)));
+          $total = 0;
+          $refercode = $this->config->get('config_reference_prefix').$data['customer_id'];
+          foreach($users as $user)
+          {
+            $custom_field = json_decode($user['custom_field'],true);
+            $total_purchase = $this->model_customer_customer->getTotalPurchaseByCustomer($user['customer_id']);
+            if($custom_field[1]==$refercode || $custom_field['refferer_id']==$refercode)
+              $total = $total+($total_purchase*$this->config->get('config_referer_comission')/100);
+            else
+              $total = $total+($total_purchase*$this->config->get('config_leg_comission')/100);
+          }
+          $data['total_commission'] = $this->currency->format($total, $this->config->get('config_currency'));
+          //pr($m);
+        }
+        $data['tab_mlm'] = $this->language->get('tab_mlm');
+        $data['column_image'] = $this->language->get('column_image');
+        $data['column_name'] = $this->language->get('column_name');
+        $data['column_email'] = $this->language->get('column_email');
+        $data['column_customer_group'] = $this->language->get('column_customer_group');
+        $data['column_status'] = $this->language->get('column_status');
+        $data['column_approved'] = $this->language->get('column_approved');
+        $data['column_ip'] = $this->language->get('column_ip');
+        $data['column_date_added'] = $this->language->get('column_date_added');
+        $data['column_action'] = $this->language->get('column_action');
+        $data['text_no_results'] = $this->language->get('text_no_results');
+        $data['text_reference_no'] = $this->language->get('text_reference_no');
+        $data['reference_no'] = $this->config->get('config_reference_prefix').$data['customer_id'];
+        ]]>
+      </add>
+    </operation>
+    <operation>
+      <search trim="true">
+        <![CDATA[public function address() {]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        public function assign()
+        {
+          $json = [];
+          $this->load->language('customer/customer');
+          $this->load->model('customer/customer');
+          if (($this->request->server['REQUEST_METHOD'] == 'POST')) {
+            $customer_info = $this->model_customer_customer->getCustomer($this->request->post['refferer_id']);
+            //pr($customer_info);
+            $field = json_decode($customer_info['custom_field'], true);
+            $field['refferer_id'] = $this->request->post['customer_id'];
+            $field[1] = $this->config->get('config_reference_prefix').$this->request->post['assign_id'];
+            $this->model_customer_customer->assignCustomer($this->request->post['refferer_id'], $field);
+            $this->session->data['success'] = $this->language->get('text_success');
+            $json['success'] = 1;
+          }
+          $this->response->addHeader('Content-Type: application/json');
+          $this->response->setOutput(json_encode($json));
+        }
+        private function getMlm($array1=[],$mlm=[],$level=0)
+        {
+          if(isset($array1['custom_field']))
+          {
+            $cs = json_decode($array1['custom_field'],true);
+          if($cs[1])
+            $ccs = str_replace($this->config->get('config_reference_prefix'),'', $cs[1]);
+          else
+            $ccs = '';
+          }
+          else
+          $ccs = [];
+          $m[] = ['memberId'=>$array1['customer_id'],'referId'=>$this->config->get('config_reference_prefix').$array1['customer_id'],'parentId'=>isset($ccs) && $ccs ? $ccs:'','name'=>$array1['firstname'].' '.$array1['lastname'],'pic'=>isset($array1['pic'])?$array1['pic']:"",'purchase'=>$this->currency->format($this->model_customer_customer->getTotalPurchaseByCustomer($array1['customer_id']), $this->config->get('config_currency'))];
+          foreach ($mlm as $key => $value) {
+            if($key < 4)
+            {
+              if($value['users'] && !empty($value['users']))
+                $m = array_merge($m,$this->getMlm($value,$value['users'],$level+1));
+              else
+              {
+                if(isset($value['custom_field']))
+              {
+                  $cs = json_decode($value['custom_field'],true);
+                  if($cs[1])
+                    $ccs = str_replace($this->config->get('config_reference_prefix'),'', $cs[1]);
+                  else
+                    $ccs = '';
+              }
+              else
+                $ccs = [];
+                $m[] = ['memberId'=>$value['customer_id'],'referId'=>'' . $this->config->get('config_reference_prefix') .$value['customer_id'],'parentId'=>isset($ccs)  && $ccs ? $ccs:'','name'=>$value['firstname'].' '.$value['lastname'],'pic'=>isset($value['pic'])?$value['pic']:"",'purchase'=>$this->currency->format($this->model_customer_customer->getTotalPurchaseByCustomer($value['customer_id']), $this->config->get('config_currency'))];
+              }
+            }
+          }
+          return $m;//$level!=0&&$this->isMultiArray($m)?array_shift($m):$m;
+        }
+        private function getMlmFreeChild($array1=[],$t=false)
+        {
+        //pr($array1);
+        $ar = [];
+         foreach ($array1 as $key => $value) {
+            if(isset($value['users']) && !empty($value['users']))
+            {
+              if(!$t)
+              {
+                if(count($value['users'])<4)
+                  $ar[] = $value;
+              }
+              else
+                $ar[] = $value;
+              $ar = array_merge($ar,$this->getMlmFreeChild($value['users']));
+              
+            }
+            else
+              $ar[] = $value;
+          }
+          return $ar;//isset($ar)?array_values(array_filter($ar)):'';
+        }
+        private function getParent($array=[])
+        {
+          //pr($array);die;
+          if(($array['count_users'])>=4)
+          {
+            foreach($array['users'] as $l=>$u)
+            {
+              if(($u['count_users'])>=4)
+              {
+                if($l==3)
+                {
+                  foreach($array['users'] as $u1)
+                  {
+                     return $this->getParent($u1);
+                  }
+                }
+              }
+              else
+              {
+                return $u['customer_id'];
+              }
+            }
+          }
+          else
+          {
+            return $array['customer_id'];
+          }
+        }
+        ]]>
+      </add>
+    </operation>
+    <operation>
+      <search trim="true">
+        <![CDATA[$this->model_customer_customer->addCustomer($this->request->post);]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        $cust = str_replace($this->config->get('config_reference_prefix'),'', $this->request->post['custom_field']);
+        $u = $this->model_customer_customer->getCustomer($cust);
+        $u['users'] = $this->model_customer_customer->getCustomerMlm($cust);
+        $u['count_users'] = count($u['users']);
+        $refer = $this->getParent($u);
+        if($refer!=$cust)
+        {
+          $this->request->post['custom_field']['refferer_id'] = $this->request->post['custom_field'][1];
+          $this->request->post['custom_field'][1] = $this->config->get('config_reference_prefix').$refer;
+        }
+        ]]>
+      </add>
+    </operation>
+    <operation>
+      <search trim="true">
+        <![CDATA[$this->model_customer_customer->editCustomer($this->request->get['customer_id'], $this->request->post);]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        $cust = str_replace($this->config->get('config_reference_prefix'),'', $this->request->post['custom_field'][1]);
+        $u = $this->model_customer_customer->getCustomer($cust);
+        $u['users'] = $this->model_customer_customer->getCustomerMlm($cust);
+        $u['count_users'] = count($u['users']);
+        $cstdtl = $this->model_customer_customer->getCustomer($this->request->get['customer_id']);
+        $cuf = json_decode($cstdtl['custom_field'],true);
+        $refer = $this->getParent($u);
+        if($refer!=$cust && $this->request->post['custom_field'][1]!=$cuf[1])
+        {
+          $this->request->post['custom_field']['refferer_id'] = $this->request->post['custom_field'][1];
+          $this->request->post['custom_field'][1] = $this->config->get('config_reference_prefix').$refer;
+        }
+        else
+        {
+          if($cuf['refferer_id'])
+            $this->request->post['custom_field']['refferer_id'] = $cuf['refferer_id'];
+        }
+        ]]>
+      </add>
+    </operation>
+  </file>
+  <file path="admin/view/template/customer/customer_form.tpl">
+  <operation>
+      <search trim="true">
+        <![CDATA[<button type="button" id="button-custom-field<?php echo $custom_field['custom_field_id']; ?>" data-loading-text="<?php echo $text_loading; ?>" class="btn btn-default"><i class="fa fa-upload"></i> <?php echo $button_upload; ?></button>]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        <?php if(isset($account_custom_field[$custom_field['custom_field_id'].'_upload'])){?>
+        <img src="<?php echo (isset($account_custom_field[$custom_field['custom_field_id'].'_upload']) ? $account_custom_field[$custom_field['custom_field_id'].'_upload'] : ''); ?>" width='80'><br/>
+        <?php }?>
+        ]]>
+      </add>
+    </operation>
+    <operation>
+      <search trim="true">
+        <![CDATA[<label class="col-sm-2 control-label" for="input-customer-group"><?php echo $entry_customer_group; ?></label>]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        <label class="col-sm-2 control-label" for="input-reference-no"><?php echo $text_reference_no; ?></label>
+            <div class="col-sm-10">
+              <input type="text" readonly="readonly" value="<?php echo $reference_no; ?>" placeholder="<?php echo $text_reference_no; ?>" id="input-reference-no" class="form-control" />
+            </div>
+          </div>
+          <div class="form-group required">
+        ]]>
+      </add>
+    </operation>
+    <operation>
+      <search trim="true">
+        <![CDATA[<li><a href="#tab-ip" data-toggle="tab"><?php echo $tab_ip; ?></a></li>]]>
+      </search>
+      <add position="after">
+        <![CDATA[
+        <li><a href="#tab-mlm" data-toggle="tab"><?php echo $tab_mlm; ?></a></li>
+        ]]>
+      </add>
+    </operation>
+    <operation>
+      <search trim="true">
+        <![CDATA[<div class="tab-pane" id="tab-ip">]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        <div class="tab-pane" id="tab-mlm">
+            <div id="mainContainer" class="clearfix"></div>
+        </div>
+        ]]>
+      </add>
+    </operation>
+    <operation>
+      <search trim="true">
+        <![CDATA[<?php echo $footer; ?>]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        <style type="text/css">
+          #mainContainer{
+              /*background:Red;*/
+              min-width:850px;
+          }
+          #mainContainer .container{
+              text-align:center;
+              margin:10px .5%;
+              padding:10px .5%;
+              /*background:green;*/
+              float:left;
+              overflow:visible;
+              position:relative;
+          }
+          #mainContainer .member{
+              background:#eee;   
+              position:relative;
+              z-index:   1;
+              cursor:default;
+              border:solid 1px #000;
+          }
+          #mainContainer .member:after{
+              display:block;
+              position:absolute;
+              left:50%;
+              width:1px; 
+              height:20px;
+              background:#000;
+              content:" ";
+              bottom:100%;
+          }
+          #mainContainer .member:hover{
+           z-index:   2;
+          }
+          #mainContainer .member .metaInfo{
+              display:none;
+              border:solid 1px #000;
+              background:#fff;
+              position:absolute;
+              bottom:100%;
+              left:50%;
+              padding:5px;
+              width:auto;
+              
+              min-width:200px;
+          }
+          #mainContainer .member .metaInfo i{color:#2ca5d3;font-size:20px;}
+          #mainContainer .member:hover .metaInfo{
+              display:block;   
+          }
+          #mainContainer .member .metaInfo img{
+            max-width:100px;
+            max-height:100px; 
+            display:inline-block; 
+            padding:5px;
+            margin-right:5px;
+            vertical-align:top;
+            float:left;
+            border:solid 1px #aaa;
+          }
+        </style>
+        ]]>
+      </add>
+    </operation>
+    <operation>
+      <search trim="true">
+        <![CDATA[$('select[name=\'customer_group_id\']').on('change', function() {]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        var members = <?php echo $mlm?>;
+          //console.log(members);
+          //var testImgSrc = "http://0.gravatar.com/avatar/06005cd2700c136d09e71838645d36ff?s=69&d=wavatar";
+          function heya( parentId ){
+              // This is slow and iterates over each object everytime.
+              // Removing each item from the array before re-iterating 
+              // may be faster for large datasets.
+              for(var i = 0; i < members.length; i++){
+                  var member = members[i];
+                  //console.log(member);
+                 //alert(member.parentId+'  '+parentId);
+                  if(member.parentId === parentId){
+                      var parent = parentId ? $("#containerFor" + parentId) : $("#mainContainer"),
+                          memberId = member.memberId,
+                              metaInfo = (member.pic?"<img src='"+member.pic+"' width='80'>":"<i class='fa fa-opencart'></i>") + member.name + " <br> Reference Id: "+member.referId;
+                      if(i==0)
+                        metaInfo += "<br> Total Commission: <?php echo $total_commission; ?>";
+                      metaInfo += "<br> Total Purchase: "+member.purchase;
+                      parent.append("<div class='container' id='containerFor" + memberId + "'><div class='member'>" + member.name + "<br>"+member.referId+"<div class='metaInfo'>" + metaInfo + "</div></div></div>");
+                      heya(memberId);
+                  } 
+              }
+           }
+        $(document).ready(function(){
+          heya('');
+          $('.assign').on('change',function(){
+            $.ajax({
+              url:'index.php?route=customer/customer/assign&token=<?php echo $token?>',
+              data:'refferer_id='+$(this).attr('data-assign')+'&customer_id='+$(this).attr('data-id')+'&assign_id='+$(this).val(),
+              type:'post',
+              dataType:'json',
+              success:function(data)
+              {
+                if(data.success)
+                  location.reload();
+              }
+            });
+          });
+          
+            
+           // makes it pretty:
+          // recursivley resizes all children to fit within the parent.
+          var pretty = function(){
+              var self = $(this),
+                  children = self.children(".container"),
+                  // subtract 4% for margin/padding/borders.
+                  width = (100/children.length) - 2;
+              children
+                  .css("width", width + "%")
+                  .each(pretty);
+
+          };
+          $("#mainContainer").each(pretty);
+      });
+        ]]>
+      </add>
+    </operation>
+  </file>
+  <file path="admin/model/customer/customer.php">
+  <operation>
+      <search trim="true">
+        <![CDATA[public function deleteLoginAttempts($email) {]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        public function assignCustomer($customer_id,$data)
+        {
+          $this->db->query("UPDATE " . DB_PREFIX . "customer SET custom_field = '" . $this->db->escape(isset($data) ? json_encode($data) : '') . "' WHERE customer_id = ".$customer_id);
+        }
+        public function getTotalPurchaseByCustomer($customer_id) {
+            $query = $this->db->query("SELECT SUM(total) AS total FROM `" . DB_PREFIX . "order` WHERE customer_id = ".$customer_id." AND order_status_id !=0");
+
+            
+            return $query->row['total'];
+          }
+        public function getCustomerMlm($customer_id)
+        { 
+          $data = [];
+          $sql = "SELECT *, CONCAT(c.firstname, ' ', c.lastname) AS name, cgd.name AS customer_group FROM " . DB_PREFIX . "customer c LEFT JOIN " . DB_PREFIX . "customer_group_description cgd ON (c.customer_group_id = cgd.customer_group_id) WHERE cgd.language_id = '" . (int)$this->config->get('config_language_id') . "'";
+
+          $implode = array();
+
+          if($customer_id)
+          {
+            $implode[] = "c.custom_field LIKE '%\"1\":\"" . $this->config->get('config_reference_prefix') . (int)$customer_id . "%'";
+          }
+          if (!empty($data['filter_name'])) {
+            $implode[] = "CONCAT(c.firstname, ' ', c.lastname) LIKE '%" . $this->db->escape($data['filter_name']) . "%'";
+          }
+
+          if (!empty($data['filter_email'])) {
+            $implode[] = "c.email LIKE '" . $this->db->escape($data['filter_email']) . "%'";
+          }
+
+          if (isset($data['filter_newsletter']) && !is_null($data['filter_newsletter'])) {
+            $implode[] = "c.newsletter = '" . (int)$data['filter_newsletter'] . "'";
+          }
+
+          if (!empty($data['filter_customer_group_id'])) {
+            $implode[] = "c.customer_group_id = '" . (int)$data['filter_customer_group_id'] . "'";
+          }
+
+          if (!empty($data['filter_ip'])) {
+            $implode[] = "c.customer_id IN (SELECT customer_id FROM " . DB_PREFIX . "customer_ip WHERE ip = '" . $this->db->escape($data['filter_ip']) . "')";
+          }
+
+          if (isset($data['filter_status']) && !is_null($data['filter_status'])) {
+            $implode[] = "c.status = '" . (int)$data['filter_status'] . "'";
+          }
+
+          if (isset($data['filter_approved']) && !is_null($data['filter_approved'])) {
+            $implode[] = "c.approved = '" . (int)$data['filter_approved'] . "'";
+          }
+
+          if (!empty($data['filter_date_added'])) {
+            $implode[] = "DATE(c.date_added) = DATE('" . $this->db->escape($data['filter_date_added']) . "')";
+          }
+
+          if ($implode) {
+            $sql .= " AND " . implode(" AND ", $implode);
+          }
+
+          $sort_data = array(
+            'name',
+            'c.email',
+            'customer_group',
+            'c.status',
+            'c.approved',
+            'c.ip',
+            'c.date_added'
+          );
+
+          if (isset($data['sort']) && in_array($data['sort'], $sort_data)) {
+            $sql .= " ORDER BY " . $data['sort'];
+          } else {
+            $sql .= " ORDER BY name";
+          }
+
+          if (isset($data['order']) && ($data['order'] == 'DESC')) {
+            $sql .= " DESC";
+          } else {
+            $sql .= " ASC";
+          }
+          $query = $this->db->query($sql);
+          //$query = $this->db->query("SELECT DISTINCT * FROM " . DB_PREFIX . "customer WHERE custom_field LIKE '%" . $this->config->get('config_reference_prefix') . (int)$customer_id . "%'");
+            $array = array();
+            //pr($query);
+            $this->load->model('tool/upload');
+            if($query->num_rows>0)
+            {
+              foreach ($query->rows as $key => $value) {
+                $array[$key] = $value;
+                $value['account_custom_field'] = json_decode($value['custom_field'],true);
+                foreach($value['account_custom_field'] as $k=>$field)
+                {
+                  $upload_info = $this->model_tool_upload->getUploadByCode($field);
+                  if ($upload_info) {
+                    $type = pathinfo($upload_info['name'], PATHINFO_EXTENSION);
+                    $pic = file_get_contents(DIR_UPLOAD . $upload_info['filename']);
+                    $array[$key]['account_custom_field'][$k.'_upload'] = $array[$key]['pic'] = 'data:image/' . $type . ';base64,' . base64_encode($pic);
+                  }
+                }
+                $array[$key]['users'] = $this->getCustomerMlm($value['customer_id']);
+                $array[$key]['count_users'] = count($array[$key]['users']);
+              }
+            }
+            //pr($array);die;
+            return $array;
+        }
+        ]]>
+      </add>
+    </operation>
+  </file>
+  <file path="catalog/language/en-gb/account/account.php">
+    <operation>
+      <search trim="true">
+        <![CDATA[$_['text_transactions']  = 'Transactions';]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        $_['text_mlm']             = 'Your Network';
+        $_['column_name']           = 'Customer Name';
+        $_['column_email']          = 'E-Mail';
+        $_['column_customer_group'] = 'Customer Group';
+        $_['column_status']         = 'Status';
+        $_['column_date_added']     = 'Date Added';
+        $_['column_comment']        = 'Comment';
+        $_['column_description']    = 'Description';
+        $_['column_amount']         = 'Amount';
+        $_['column_points']         = 'Points';
+        $_['column_ip']             = 'IP';
+        $_['column_total']          = 'Total Accounts';
+        $_['column_action']         = 'Action';
+        $_['text_enabled']                  = 'Enabled';
+        $_['text_disabled']                 = 'Disabled';
+        ]]>
+      </add>
+    </operation>
+  </file>
+  <file path="catalog/language/english/account/account.php">
+    <operation>
+      <search trim="true">
+        <![CDATA[$_['text_transactions']  = 'Transactions';]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        $_['text_mlm']             = 'Your Network';
+        $_['column_name']           = 'Customer Name';
+        $_['column_email']          = 'E-Mail';
+        $_['column_customer_group'] = 'Customer Group';
+        $_['column_status']         = 'Status';
+        $_['column_date_added']     = 'Date Added';
+        $_['column_comment']        = 'Comment';
+        $_['column_description']    = 'Description';
+        $_['column_amount']         = 'Amount';
+        $_['column_points']         = 'Points';
+        $_['column_ip']             = 'IP';
+        $_['column_total']          = 'Total Accounts';
+        $_['column_action']         = 'Action';
+        $_['text_enabled']                  = 'Enabled';
+        $_['text_disabled']                 = 'Disabled';
+        $_['text_no_results']               = 'No results!';
+
+        ]]>
+      </add>
+    </operation>
+  </file>
+  <file path="catalog/controller/account/account.php">
+    <operation>
+      <search trim="true">
+        <![CDATA[$data['text_transaction'] = $this->language->get('text_transaction');]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        $data['text_mlm'] = $this->language->get('text_mlm');
+        ]]>
+      </add>
+    </operation>
+    <operation>
+      <search trim="true">
+        <![CDATA[$data['address'] = $this->url->link('account/address', '', true);]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        $data['mlm'] = $this->url->link('account/account/mlm', '', true);
+        ]]>
+      </add>
+    </operation>
+    <operation>
+      <search trim="true">
+        <![CDATA[public function country() {]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        public function mlm() {
+          if (!$this->customer->isLogged()) {
+            $this->session->data['redirect'] = $this->url->link('account/account', '', true);
+            $this->response->redirect($this->url->link('account/login', '', true));
+          }
+          $this->load->language('account/account');
+          $this->document->setTitle($this->language->get('text_mlm'));
+          $data['breadcrumbs'] = array();
+
+          $data['breadcrumbs'][] = array(
+            'text' => $this->language->get('text_home'),
+            'href' => $this->url->link('common/home')
+          );
+
+          $data['breadcrumbs'][] = array(
+            'text' => $this->language->get('text_account'),
+            'href' => $this->url->link('account/account', '', true)
+          );
+          $data['breadcrumbs'][] = array(
+            'text' => $this->language->get('text_mlm'),
+            'href' => $this->url->link('account/account/mlm', '', true)
+          );
+
+          if (isset($this->session->data['success'])) {
+            $data['success'] = $this->session->data['success'];
+
+            unset($this->session->data['success']);
+          } else {
+            $data['success'] = '';
+          } 
+          $this->load->model('account/customer');
+          $customer_info = $this->model_account_customer->getCustomer($this->customer->getId());
+          // Custom Fields
+          $this->load->model('account/custom_field');
+
+          $data['custom_fields'] = $this->model_account_custom_field->getCustomFields($this->config->get('config_customer_group_id'));
+
+          if (isset($this->request->post['custom_field'])) {
+            $data['account_custom_field'] = $this->request->post['custom_field'];
+          } elseif (isset($customer_info)) {
+            $data['account_custom_field'] = json_decode($customer_info['custom_field'], true);
+          } else {
+            $data['account_custom_field'] = array();
+          }
+          if(!empty($data['account_custom_field']))
+          {
+            $this->load->model('tool/upload');
+            foreach($data['account_custom_field'] as $k=>$field)
+            {
+              if($field)
+              {
+                $upload_info = $this->model_tool_upload->getUploadByCode($field);
+                if ($upload_info) {
+                  $type = pathinfo($upload_info['name'], PATHINFO_EXTENSION);
+                  $pic = file_get_contents(DIR_UPLOAD . $upload_info['filename']);
+                  $data['account_custom_field'][$k.'_upload'] = $data['pic'] = 'data:image/' . $type . ';base64,' . base64_encode($pic);
+                }
+              }
+            }
+            $mlm = $this->model_account_customer->getCustomerMlm($this->customer->getId());
+            $slice = array_slice($mlm,4);
+            $data['spam']  = [];
+            foreach ($slice as $result) {
+              if (!$result['approved']) {
+                $approve = $this->url->link('customer/customer/approve', 'token=' . $this->session->data['token'] . '&customer_id=' . $result['customer_id'] . $url, true);
+              } else {
+                $approve = '';
+              }
+
+             $login_info = $this->model_account_customer->getLoginAttempts($result['email']);
+
+              if ($login_info && $login_info['total'] >= $this->config->get('config_login_attempts')) {
+                $unlock = $this->url->link('customer/customer/unlock', 'token=' . $this->session->data['token'] . '&email=' . $result['email'] . $url, true);
+              } else {
+                $unlock = '';
+              }
+
+              $data['spam'][] = array(
+                'customer_id'    => $result['customer_id'],
+                'name'           => $result['name'],
+                'email'          => $result['email'],
+                'customer_group' => $result['customer_group'],
+                'status'         => ($result['status'] ? $this->language->get('text_enabled') : $this->language->get('text_disabled')),
+                'ip'             => $result['ip'],
+                'date_added'     => date($this->language->get('date_format_short'), strtotime($result['date_added'])),
+                'approve'        => $approve,
+                'unlock'         => $unlock,
+                'edit'           => $this->url->link('customer/customer/edit', 'token=' . $this->session->data['token'] . '&customer_id=' . $result['customer_id'] , true)
+              );
+            }
+            //$data['spam'] = $slice;
+            $m = $this->getMlm($customer_info,$mlm);
+            $data['mlm'] = json_encode($m);
+            $data['free_level_users'] = array_values(array_filter($this->getMlmFreeChild($mlm)));
+            $users = array_values(array_filter($this->getMlmFreeChild($mlm)));
+            $total = 0;
+            $refercode = $this->config->get('config_reference_prefix').$this->customer->getId();
+            foreach($users as $user)
+            {
+              $custom_field = json_decode($user['custom_field'],true);
+              $total_purchase = $this->model_account_customer->getTotalPurchaseByCustomer($user['customer_id']);
+              if($custom_field[1]==$refercode || $custom_field['refferer_id']==$refercode)
+                $total = $total+($total_purchase*$this->config->get('config_referer_comission')/100);
+              else
+                $total = $total+($total_purchase*$this->config->get('config_leg_comission')/100);
+            }
+            $data['total_commission'] = $this->currency->format($total, $this->config->get('config_currency'));
+            //pr($m);
+          }
+          $data['customer_id'] = $this->customer->getId();
+          $data['tab_mlm'] = $this->language->get('tab_mlm');
+
+          $data['heading_title'] = $this->language->get('text_mlm');
+
+          $data['column_name'] = $this->language->get('column_name');
+          $data['column_email'] = $this->language->get('column_email');
+          $data['column_customer_group'] = $this->language->get('column_customer_group');
+          $data['column_status'] = $this->language->get('column_status');
+          $data['column_date_added'] = $this->language->get('column_date_added');
+          $data['column_action'] = $this->language->get('column_action');
+          $data['text_select'] = $this->language->get('text_select');
+          $data['text_no_results'] = $this->language->get('text_no_results');
+          $data['text_reference_no'] = $this->language->get('text_reference_no');
+          $data['reference_no'] = $this->config->get('config_reference_prefix').$data['customer_id'];
+
+          $data['text_my_account'] = $this->language->get('text_mlm');
+          $data['column_left'] = $this->load->controller('common/column_left');
+          $data['column_right'] = $this->load->controller('common/column_right');
+          $data['content_top'] = $this->load->controller('common/content_top');
+          $data['content_bottom'] = $this->load->controller('common/content_bottom');
+          $data['footer'] = $this->load->controller('common/footer');
+          $data['header'] = $this->load->controller('common/header');
+          $data['is_mlm'] = true;
+          $this->response->setOutput($this->load->view('account/account', $data));
+        }
+        public function assign()
+        {
+          $json = [];
+          $this->load->language('customer/customer');
+          $this->load->model('customer/customer');
+          if (($this->request->server['REQUEST_METHOD'] == 'POST')) {
+            $customer_info = $this->model_account_customer->getCustomer($this->request->post['refferer_id']);
+            //pr($customer_info);
+            $field = json_decode($customer_info['custom_field'], true);
+            $field['refferer_id'] = $this->request->post['customer_id'];
+            $field[1] = $this->config->get('config_reference_prefix').$this->request->post['assign_id'];
+            $this->model_account_customer->assignCustomer($this->request->post['refferer_id'], $field);
+            $this->session->data['success'] = $this->language->get('text_success');
+            $json['success'] = 1;
+          }
+          $this->response->addHeader('Content-Type: application/json');
+          $this->response->setOutput(json_encode($json));
+        }
+        private function getMlm($array1=[],$mlm=[],$level=0)
+        {
+            $this->load->model('account/customer');
+            if(isset($array1['custom_field']))
+            {
+              $cs = json_decode($array1['custom_field'],true);
+            if($cs[1])
+              $ccs = str_replace($this->config->get('config_reference_prefix'),'', $cs[1]);
+            else
+              $ccs = '';
+            }
+            else
+            $ccs = [];
+            $m[] = ['memberId'=>$array1['customer_id'],'referId'=>$this->config->get('config_reference_prefix').$array1['customer_id'],'parentId'=>isset($ccs) && $ccs ? $ccs:'','name'=>$array1['firstname'].' '.$array1['lastname'],'pic'=>isset($array1['pic'])?$array1['pic']:"",'purchase'=>$this->currency->format($this->model_account_customer->getTotalPurchaseByCustomer($array1['customer_id']), $this->config->get('config_currency'))];
+            foreach ($mlm as $key => $value) {
+              if($key < 4)
+              {
+                if($value['users'] && !empty($value['users']))
+                  $m = array_merge($m,$this->getMlm($value,$value['users'],$level+1));
+                else
+                {
+                  if(isset($value['custom_field']))
+                {
+                    $cs = json_decode($value['custom_field'],true);
+                    if($cs[1])
+                      $ccs = str_replace($this->config->get('config_reference_prefix'),'', $cs[1]);
+                    else
+                      $ccs = '';
+                }
+                else
+                  $ccs = [];
+                  $m[] = ['memberId'=>$value['customer_id'],'referId'=>'' . $this->config->get('config_reference_prefix') .$value['customer_id'],'parentId'=>isset($ccs)  && $ccs ? $ccs:'','name'=>$value['firstname'].' '.$value['lastname'],'pic'=>isset($value['pic'])?$value['pic']:"",'purchase'=>$this->currency->format($this->model_account_customer->getTotalPurchaseByCustomer($value['customer_id']), $this->config->get('config_currency'))];
+                }
+              }
+            }
+            return $m;//$level!=0&&$this->isMultiArray($m)?array_shift($m):$m;
+          }
+          private function getMlmFreeChild($array1=[],$t=false)
+          {
+          //pr($array1);
+          $ar = [];
+           foreach ($array1 as $key => $value) {
+              if(isset($value['users']) && !empty($value['users']))
+              {
+                if(!$t)
+                {
+                  if(count($value['users'])<4)
+                    $ar[] = $value;
+                }
+                else
+                  $ar[] = $value;
+                $ar = array_merge($ar,$this->getMlmFreeChild($value['users']));
+                
+              }
+              else
+                $ar[] = $value;
+            }
+            return $ar;//isset($ar)?array_values(array_filter($ar)):'';
+          }
+          
+        ]]>
+      </add>
+    </operation>
+  </file>
+  <file path="catalog/view/theme/*/template/account/account.tpl">
+    <operation>
+      <search trim="true">
+        <![CDATA[<h2><?php echo $text_my_account; ?></h2>]]>
+      </search>
+      <add position="after">
+        <![CDATA[
+        <?php if(isset($is_mlm) && $is_mlm){?>
+            <div id="mainContainer" class="clearfix"></div>
+            
+            <style type="text/css">
+              #mainContainer{
+                  /*background:Red;*/
+                  min-width:850px;
+              }
+              #mainContainer .container{
+                  text-align:center;
+                  margin:10px .5%;
+                  padding:10px .5%;
+                  /*background:green;*/
+                  float:left;
+                  overflow:visible;
+                  position:relative;
+              }
+
+
+              #mainContainer .member{
+                  background:#eee;   
+                  position:relative;
+                  z-index:   1;
+                  cursor:default;
+                  border:solid 1px #000;
+              }
+              #mainContainer .member:after{
+                  display:block;
+                  position:absolute;
+                  left:50%;
+                  width:1px; 
+                  height:20px;
+                  background:#000;
+                  content:" ";
+                  bottom:100%;
+              }
+              #mainContainer .member:hover{
+               z-index:   2;
+              }
+              #mainContainer .member .metaInfo{
+                  display:none;
+                  border:solid 1px #000;
+                  background:#fff;
+                  position:absolute;
+                  bottom:100%;
+                  left:50%;
+                  padding:5px;
+                  width:auto;
+                  
+                  min-width:200px;
+              }
+              #mainContainer .member .metaInfo i{color:#2ca5d3;font-size:20px;}
+              #mainContainer .member:hover .metaInfo{
+                  display:block;   
+              }
+              #mainContainer .member .metaInfo img{
+                max-width:100px;
+                max-height:100px; 
+                display:inline-block; 
+                padding:5px;
+                margin-right:5px;
+                vertical-align:top;
+                float:left;
+                border:solid 1px #aaa;
+              }
+            </style>
+            <script>
+                var members = <?php echo $mlm?>;
+                //console.log(members);
+                //var testImgSrc = "http://0.gravatar.com/avatar/06005cd2700c136d09e71838645d36ff?s=69&d=wavatar";
+                function heya( parentId ){
+                    // This is slow and iterates over each object everytime.
+                    // Removing each item from the array before re-iterating 
+                    // may be faster for large datasets.
+                    for(var i = 0; i < members.length; i++){
+                        var member = members[i];
+                        //console.log(member);
+                       //alert(member.parentId+'  '+parentId);
+                        if(member.parentId === parentId){
+                            var parent = parentId ? $("#containerFor" + parentId) : $("#mainContainer"),
+                                memberId = member.memberId,
+                                    metaInfo = (member.pic?"<img src='"+member.pic+"' width='80'>":"<i class='fa fa-opencart'></i>") + member.name + " <br> Reference Id: "+member.referId;
+                            if(i==0)
+                              metaInfo += "<br> Total Commission: <?php echo $total_commission; ?>";
+                            metaInfo += "<br> Total Purchase: "+member.purchase;
+                            parent.append("<div class='container' id='containerFor" + memberId + "'><div class='member'>" + member.name + "<br>"+member.referId+"<div class='metaInfo'>" + metaInfo + "</div></div></div>");
+                            heya(memberId);
+                        } 
+                    }
+                 }
+              $(document).ready(function(){
+                heya('');
+                $('.assign').on('change',function(){
+                  $.ajax({
+                    url:'index.php?route=account/account/assign',
+                    data:'refferer_id='+$(this).attr('data-assign')+'&customer_id='+$(this).attr('data-id')+'&assign_id='+$(this).val(),
+                    type:'post',
+                    dataType:'json',
+                    success:function(data)
+                    {
+                      if(data.success)
+                        location.reload();
+                    }
+                  });
+                });
+                
+                  
+                 // makes it pretty:
+                // recursivley resizes all children to fit within the parent.
+                var pretty = function(){
+                    var self = $(this),
+                        children = self.children(".container"),
+                        // subtract 4% for margin/padding/borders.
+                        width = (100/children.length) - 2;
+                    children
+                        .css("width", width + "%")
+                        .each(pretty);
+
+                };
+                $("#mainContainer").each(pretty);
+            });
+            </script>
+        <?php }else{?>
+
+        ]]>
+      </add>
+    </operation>
+    <operation>
+      <search trim="true">
+        <![CDATA[<?php echo $content_bottom; ?>]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        <?php }?>
+        ]]>
+      </add>
+    </operation>
+    <operation>
+      <search trim="true">
+        <![CDATA[<li><a href="<?php echo $wishlist; ?>"><?php echo $text_wishlist; ?></a></li>]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        <li><a href="<?php echo $mlm; ?>"><?php echo $text_mlm; ?></a></li>
+        ]]>
+      </add>
+    </operation>
+  </file>
+  <file path="catalog/model/account/customer.php">
+  <operation>
+      <search trim="true">
+        <![CDATA[public function deleteLoginAttempts($email) {]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        public function assignCustomer($customer_id,$data)
+        {
+          $this->db->query("UPDATE " . DB_PREFIX . "customer SET custom_field = '" . $this->db->escape(isset($data) ? json_encode($data) : '') 
+          . "' WHERE customer_id = ".$customer_id);
+        }
+        public function getTotalPurchaseByCustomer($customer_id) {
+            $query = $this->db->query("SELECT SUM(total) AS total FROM `" . DB_PREFIX . "order` WHERE customer_id = ".$customer_id." AND order_status_id !=0");    
+            return $query->row['total'];
+        }
+        public function getCustomerMlm($customer_id)
+        { 
+          $data = [];
+          $sql = "SELECT *, CONCAT(c.firstname, ' ', c.lastname) AS name, cgd.name AS customer_group FROM " . DB_PREFIX . "customer c LEFT JOIN " . DB_PREFIX . "customer_group_description cgd ON (c.customer_group_id = cgd.customer_group_id) WHERE cgd.language_id = '" . (int)$this->config->get('config_language_id') . "'";
+
+          $implode = array();
+
+          if($customer_id)
+          {
+            $implode[] = "c.custom_field LIKE '%\"1\":\"" . $this->config->get('config_reference_prefix') . (int)$customer_id . "%'";
+          }
+          if (!empty($data['filter_name'])) {
+            $implode[] = "CONCAT(c.firstname, ' ', c.lastname) LIKE '%" . $this->db->escape($data['filter_name']) . "%'";
+          }
+
+          if (!empty($data['filter_email'])) {
+            $implode[] = "c.email LIKE '" . $this->db->escape($data['filter_email']) . "%'";
+          }
+
+          if (isset($data['filter_newsletter']) && !is_null($data['filter_newsletter'])) {
+            $implode[] = "c.newsletter = '" . (int)$data['filter_newsletter'] . "'";
+          }
+
+          if (!empty($data['filter_customer_group_id'])) {
+            $implode[] = "c.customer_group_id = '" . (int)$data['filter_customer_group_id'] . "'";
+          }
+
+          if (!empty($data['filter_ip'])) {
+            $implode[] = "c.customer_id IN (SELECT customer_id FROM " . DB_PREFIX . "customer_ip WHERE ip = '" . $this->db->escape($data['filter_ip']) . "')";
+          }
+
+          if (isset($data['filter_status']) && !is_null($data['filter_status'])) {
+            $implode[] = "c.status = '" . (int)$data['filter_status'] . "'";
+          }
+
+          if (isset($data['filter_approved']) && !is_null($data['filter_approved'])) {
+            $implode[] = "c.approved = '" . (int)$data['filter_approved'] . "'";
+          }
+
+          if (!empty($data['filter_date_added'])) {
+            $implode[] = "DATE(c.date_added) = DATE('" . $this->db->escape($data['filter_date_added']) . "')";
+          }
+
+          if ($implode) {
+            $sql .= " AND " . implode(" AND ", $implode);
+          }
+
+          $sort_data = array(
+            'name',
+            'c.email',
+            'customer_group',
+            'c.status',
+            'c.approved',
+            'c.ip',
+            'c.date_added'
+          );
+
+          if (isset($data['sort']) && in_array($data['sort'], $sort_data)) {
+            $sql .= " ORDER BY " . $data['sort'];
+          } else {
+            $sql .= " ORDER BY name";
+          }
+
+          if (isset($data['order']) && ($data['order'] == 'DESC')) {
+            $sql .= " DESC";
+          } else {
+            $sql .= " ASC";
+          }
+          $query = $this->db->query($sql);
+          //$query = $this->db->query("SELECT DISTINCT * FROM " . DB_PREFIX . "customer WHERE custom_field LIKE '%" . $this->config->get('config_reference_prefix') . (int)$customer_id . "%'");
+            $array = array();
+            //pr($query);
+            $this->load->model('tool/upload');
+            if($query->num_rows>0)
+            {
+              foreach ($query->rows as $key => $value) {
+                $array[$key] = $value;
+                $value['account_custom_field'] = json_decode($value['custom_field'],true);
+                foreach($value['account_custom_field'] as $k=>$field)
+                {
+                  $upload_info = $this->model_tool_upload->getUploadByCode($field);
+                  if ($upload_info) {
+                    $type = pathinfo($upload_info['name'], PATHINFO_EXTENSION);
+                    $pic = file_get_contents(DIR_UPLOAD . $upload_info['filename']);
+                    $array[$key]['account_custom_field'][$k.'_upload'] = $array[$key]['pic'] = 'data:image/' . $type . ';base64,' . base64_encode($pic);
+                  }
+                }
+                $array[$key]['users'] = $this->getCustomerMlm($value['customer_id']);
+              }
+            }
+            //pr($array);die;
+            return $array;
+        }
+        ]]>
+      </add>
+    </operation>
+  </file>
+  <file path="catalog/controller/account/edit.php">
+    <operation>
+      <search trim="true">
+        <![CDATA[$data['back'] = $this->url->link('account/account', '', true);]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        if(!empty($data['account_custom_field']))
+        {
+          $this->load->model('tool/upload');
+          foreach($data['account_custom_field'] as $k=>$field)
+          {
+            $upload_info = $this->model_tool_upload->getUploadByCode($field);
+            if ($upload_info) {
+              $type = pathinfo($upload_info['name'], PATHINFO_EXTENSION);
+              $pic = file_get_contents(DIR_UPLOAD . $upload_info['filename']);
+              $data['account_custom_field'][$k.'_upload'] = 'data:image/' . $type . ';base64,' . base64_encode($pic);
+            }
+          }
+        }
+        ]]>
+      </add>
+    </operation>
+    <operation>
+      <search trim="true">
+        <![CDATA[$this->model_account_customer->editCustomer($this->request->post);]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        $cust = str_replace($this->config->get('config_reference_prefix'),'', $this->request->post['custom_field']);
+        $u = $this->model_account_customer->getCustomer($cust);
+        $u['users'] = $this->model_account_customer->getCustomerMlm($cust);
+        $u['count_users'] = count($u['users']);
+        $cstdtl = $this->model_account_customer->getCustomer($this->request->get['customer_id']);
+        $cuf = json_decode($cstdtl['custom_field'],true);
+        $refer = $this->getParent($u);
+        if($refer!=$cust && $this->request->post['custom_field'][1]!=$cuf[1])
+        {
+          $this->request->post['custom_field']['refferer_id'] = $this->request->post['custom_field'][1];
+          $this->request->post['custom_field'][1] = $this->config->get('config_reference_prefix').$refer;
+        }
+        else
+        {
+          if($cuf['refferer_id'])
+            $this->request->post['custom_field']['refferer_id'] = $cuf['refferer_id'];
+        }
+        ]]>
+      </add>
+    </operation>
+    <operation>
+      <search trim="true">
+        <![CDATA[protected function validate() {]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+          private function getParent($array=[])
+          {
+            //pr($array);die;
+            if(($array['count_users'])>=4)
+            {
+              foreach($array['users'] as $l=>$u)
+              {
+                if(($u['count_users'])>=4)
+                {
+                  if($l==3)
+                  {
+                    foreach($array['users'] as $u1)
+                    {
+                       return $this->getParent($u1);
+                    }
+                  }
+                }
+                else
+                {
+                  return $u['customer_id'];
+                }
+              }
+            }
+            else
+            {
+              return $array['customer_id'];
+            }
+          }
+        ]]>
+      </add>
+    </operation>
+  </file>
+  <file path="catalog/controller/account/register.php">
+    <operation>
+      <search trim="true">
+        <![CDATA[$customer_id = $this->model_account_customer->addCustomer($this->request->post);]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        $cust = str_replace($this->config->get('config_reference_prefix'),'', $this->request->post['custom_field']);
+        $u = $this->model_account_customer->getCustomer($cust);
+        $u['users'] = $this->model_account_customer->getCustomerMlm($cust);
+        $u['count_users'] = count($u['users']);
+        $refer = $this->getParent($u);
+        if($refer!=$cust)
+        {
+          $this->request->post['custom_field']['refferer_id'] = $this->request->post['custom_field'][1];
+          $this->request->post['custom_field'][1] = $this->config->get('config_reference_prefix').$refer;
+        }
+        ]]>
+      </add>
+    </operation>
+    <operation>
+      <search trim="true">
+        <![CDATA[public function customfield() {]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+          private function getParent($array=[])
+          {
+            //pr($array);die;
+            if(($array['count_users'])>=4)
+            {
+              foreach($array['users'] as $l=>$u)
+              {
+                if(($u['count_users'])>=4)
+                {
+                  if($l==3)
+                  {
+                    foreach($array['users'] as $u1)
+                    {
+                       return $this->getParent($u1);
+                    }
+                  }
+                }
+                else
+                {
+                  return $u['customer_id'];
+                }
+              }
+            }
+            else
+            {
+              return $array['customer_id'];
+            }
+          }
+        ]]>
+      </add>
+    </operation>
+  </file>
+  <file path="catalog/view/theme/*/template/account/edit.tpl">
+    <operation>
+      <search trim="true">
+        <![CDATA[<button type="button" id="button-custom-field<?php echo $custom_field['custom_field_id']; ?>" data-loading-text="<?php echo $text_loading; ?>" class="btn btn-default"><i class="fa fa-upload"></i> <?php echo $button_upload; ?></button>]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        <?php if(isset($account_custom_field[$custom_field['custom_field_id'].'_upload'])){?>
+        <img src="<?php echo (isset($account_custom_field[$custom_field['custom_field_id'].'_upload']) ? $account_custom_field[$custom_field['custom_field_id'].'_upload'] : ''); ?>" width='80'><br/>
+        <?php }?>
+        ]]>
+      </add>
+    </operation>
+  </file>
+  <file path="admin/controller/setting/setting.php">
+    <operation>
+      <search trim="true">
+        <![CDATA[$data['entry_login_attempts'] = $this->language->get('entry_login_attempts');]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        $data['entry_reference_prefix'] = $this->language->get('entry_reference_prefix');
+        $data['entry_referer_comission'] = $this->language->get('entry_referer_comission');
+        $data['entry_leg_comission'] = $this->language->get('entry_leg_comission');
+        $data['entry_leg_level'] = $this->language->get('entry_leg_level');
+        ]]>
+      </add>
+    </operation>
+    <operation>
+      <search trim="true">
+        <![CDATA[if (isset($this->error['voucher_min'])) {]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        if (isset($this->error['reference_prefix'])) {
+          $data['error_reference_prefix'] = $this->error['reference_prefix'];
+        } else {
+          $data['error_reference_prefix'] = '';
+        }
+        if (isset($this->error['referer_comission'])) {
+          $data['error_referer_comission'] = $this->error['referer_comission'];
+        } else {
+          $data['error_referer_comission'] = '';
+        }
+        if (isset($this->error['leg_comission'])) {
+          $data['error_leg_comission'] = $this->error['leg_comission'];
+        } else {
+          $data['error_leg_comission'] = '';
+        }
+        if (isset($this->error['leg_level'])) {
+          $data['error_leg_level'] = $this->error['leg_level'];
+        } else {
+          $data['error_leg_level'] = '';
+        }
+        ]]>
+      </add>
+    </operation>
+    <operation>
+      <search trim="true">
+        <![CDATA[if (isset($this->request->post['config_login_attempts'])) {]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        if (isset($this->request->post['config_reference_prefix'])) {
+          $data['config_reference_prefix'] = $this->request->post['config_reference_prefix'];
+        } elseif ($this->config->has('config_reference_prefix')) {
+          $data['config_reference_prefix'] = $this->config->get('config_reference_prefix');
+        } else {
+          $data['config_reference_prefix'] = 'REFMLM-';
+        }
+        if (isset($this->request->post['config_referer_comission'])) {
+          $data['config_referer_comission'] = $this->request->post['config_referer_comission'];
+        } elseif ($this->config->has('config_referer_comission')) {
+          $data['config_referer_comission'] = $this->config->get('config_referer_comission');
+        } else {
+          $data['config_referer_comission'] = '6';
+        }
+        if (isset($this->request->post['config_leg_comission'])) {
+          $data['config_leg_comission'] = $this->request->post['config_leg_comission'];
+        } elseif ($this->config->has('config_leg_comission')) {
+          $data['config_leg_comission'] = $this->config->get('config_leg_comission');
+        } else {
+          $data['config_leg_comission'] = '1';
+        }
+        if (isset($this->request->post['config_leg_level'])) {
+          $data['config_leg_level'] = $this->request->post['config_leg_level'];
+        } elseif ($this->config->has('config_leg_level')) {
+          $data['config_leg_level'] = $this->config->get('config_leg_level');
+        } else {
+          $data['config_leg_level'] = '16';
+        }
+
+        ]]>
+      </add>
+    </operation>
+    <operation>
+      <search trim="true">
+        <![CDATA[if ($this->request->post['config_login_attempts'] < 1) {]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        if (!is_numeric($this->request->post['config_referer_comission']) && $this->request->post['config_referer_comission'] < 1 && $this->request->post['config_referer_comission']>100) {
+          $this->error['referer_comission'] = $this->language->get('error_percentage');
+        }
+        if (!is_numeric($this->request->post['config_leg_comission']) && $this->request->post['config_leg_comission'] < 1 && $this->request->post['config_leg_comission']>100) {
+          $this->error['leg_comission'] = $this->language->get('error_percentage');
+        }
+        if (!is_numeric($this->request->post['config_leg_level'])) {
+          $this->error['leg_level'] = $this->language->get('error_level');
+        }
+        ]]>
+      </add>
+    </operation>
+  </file>
+  <file path="admin/language/en-gb/setting/setting.php">
+    <operation>
+      <search trim="true">
+        <![CDATA[$_['entry_login_attempts']         = 'Max Login Attempts';]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        $_['entry_reference_prefix']         = 'Reference No. Prefix';
+        $_['entry_referer_comission']         = 'Referer Comission in purchase percent';
+        $_['entry_leg_comission']         = 'Leg Comission in purchase percent';
+        $_['entry_leg_level']         = 'How many level for leg comission';
+        $_['error_level']         = 'Please enter a valid level';
+        $_['error_percentage']         = 'Please enter a valid percentage without symbol';
+        ]]>
+      </add>
+    </operation>
+  </file>
+  <file path="admin/view/template/setting/setting.tpl">
+    <operation>
+      <search trim="true">
+        <![CDATA[<label class="col-sm-2 control-label" for="input-account"><span data-toggle="tooltip" title="<?php echo $help_account; ?>"><?php echo $entry_account; ?></span></label>]]>
+      </search>
+      <add position="before">
+        <![CDATA[
+        <label class="col-sm-2 control-label" for="input-reference-prefix"><?php echo $entry_reference_prefix; ?></label>
+        <div class="col-sm-10">
+            <input type="text" name="config_reference_prefix" value="<?php echo $config_reference_prefix; ?>" placeholder="<?php echo $entry_reference_prefix; ?>" id="input-reference-prefix" class="form-control" />
+            <?php if ($error_reference_prefix) { ?>
+            <div class="text-danger"><?php echo $error_reference_prefix; ?></div>
+            <?php } ?>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="col-sm-2 control-label" for="input-reference-comission"><?php echo $entry_referer_comission; ?></label>
+        <div class="col-sm-10">
+            <input type="text" name="config_referer_comission" value="<?php echo $config_referer_comission; ?>" placeholder="<?php echo $entry_referer_comission; ?>" id="input-reference-comission" class="form-control" />
+            <?php if ($error_referer_comission) { ?>
+            <div class="text-danger"><?php echo $error_referer_comission; ?></div>
+            <?php } ?>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="col-sm-2 control-label" for="input-leg-comission"><?php echo $entry_leg_comission; ?></label>
+        <div class="col-sm-10">
+            <input type="text" name="config_leg_comission" value="<?php echo $config_leg_comission; ?>" placeholder="<?php echo $entry_leg_comission; ?>" id="input-leg-comission" class="form-control" />
+            <?php if ($error_leg_comission) { ?>
+            <div class="text-danger"><?php echo $error_leg_comission; ?></div>
+            <?php } ?>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="col-sm-2 control-label" for="input-leg-level"><?php echo $entry_leg_level; ?></label>
+        <div class="col-sm-10">
+            <input type="text" name="config_leg_level" value="<?php echo $config_leg_level; ?>" placeholder="<?php echo $entry_leg_level; ?>" id="input-leg-level" class="form-control" />
+            <?php if ($error_leg_level) { ?>
+            <div class="text-danger"><?php echo $error_leg_level; ?></div>
+            <?php } ?>
+          </div>
+        </div>
+        <div class="form-group">
+        ]]>
+      </add>
+    </operation>
+  </file>
+</modification>
